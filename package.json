@@ -4,13 +4,21 @@
   "version": "1.0.0",
   "unity": "2018.4",
   "description": "C# string zero GC allocation supplementary scheme",
-  "keywords": [],
+  "keywords": [
+    "ZString",
+    "String",
+    "GC"
+  ],
   "license": "MIT",
-  "category": "",
+  "category": "Framework",
   "author": {
     "name": "coh5",
     "email": "871041532@outlook.com",
-    "url": "https://github.com/871041532/zstring/tree/master"
+    "url": "https://github.com/MUDV587/zstring"
   },
-  "type": "tool"
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MUDV587/zstring.git"
+  },
+  "type": "library"
 }
