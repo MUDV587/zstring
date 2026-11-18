@@ -1,0 +1,16 @@
+{
+  "name": "com.coh5.zstring",
+  "displayName": "zstring",
+  "version": "1.0.0",
+  "unity": "2018.4",
+  "description": "C# string zero GC allocation supplementary scheme",
+  "keywords": [],
+  "license": "MIT",
+  "category": "",
+  "author": {
+    "name": "coh5",
+    "email": "871041532@outlook.com",
+    "url": "https://github.com/871041532/zstring/tree/master"
+  },
+  "type": "tool"
+}
