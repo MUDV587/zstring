@@ -62,6 +62,10 @@ using (zstring.Block())
 - 本 fork（UPM 化）：[MUDV587/zstring](https://github.com/MUDV587/zstring)
 - 有事请联系原作者：871041532@outlook.com 或 QQ(微信) 871041532
 
+## 运行测试
+
+`Tests/Editor/` 下的单元测试（NUnit）可通过 Unity Test Runner（EditMode）运行。已知在 `.NET` 环境下也能直接以 NUnit 跑全部用例。
+
 ## License
 
 MIT，详见 [LICENSE](LICENSE)。

@@ -1,7 +1,7 @@
 {
   "name": "com.coh5.zstring",
   "displayName": "zstring",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "unity": "2018.4",
   "description": "C# string zero GC allocation supplementary scheme",
   "keywords": [

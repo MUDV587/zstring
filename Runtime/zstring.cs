@@ -1,4 +1,4 @@
-﻿
+
 /*
  介绍：
     C# 0GC字符串补充方案。结合gstring与CString两者特点（向这两个方案的作者致敬），只有一个文件，性能与使用方便性高于两者。
@@ -117,8 +117,8 @@ public class zstring
 
     static Stack<zstring_block> g_blocks;//zstring_block缓存栈
     static Stack<zstring_block> g_open_blocks;//zstring已经打开的缓存栈      
-    static Dictionary<int, string> g_intern_table;//字符串intern表
-    public static zstring_block g_current_block;//zstring所在的block块
+    static Dictionary<string, string> g_intern_table;//字符串intern表
+    internal static zstring_block g_current_block;//zstring所在的block块
     static List<int> g_finds;//字符串replace功能记录子串位置
     static zstring[] g_format_args;//存储格式化字符串值
 
@@ -201,8 +201,8 @@ public class zstring
         if (value == null)
             return null;
 #if DBG
-            if (log != null)
-                log("Getting: " + value);
+            if (Log != null)
+                Log("Getting: " + value);
 #endif
         var result = get(value.Length);
         memcpy(dst: result, src: value);//内存拷贝
@@ -232,17 +232,18 @@ public class zstring
     //将string加入intern表中
     private static string __intern(string value)
     {
+        if (value == null)
+            return null;
 
-        int hash = value.GetHashCode();
-        if (g_intern_table.ContainsKey(hash))
+        if (g_intern_table.TryGetValue(value, out string interned))
         {
-            return g_intern_table[hash];
+            return interned;
         }
         else
         {
-            string interned = new string(NEW_ALLOC_CHAR, value.Length);
+            interned = new string(NEW_ALLOC_CHAR, value.Length);
             memcpy(interned, value);
-            g_intern_table.Add(hash, interned);
+            g_intern_table.Add(value, interned);
             return interned;
         }
     }
@@ -266,7 +267,7 @@ public class zstring
     //获取特定长度zstring
     private static zstring get(int length)
     {
-        if (g_current_block == null || length <= 0)
+        if (g_current_block == null || length < 0)
             throw new InvalidOperationException("zstring 操作必须在一个zstring_block块中。");
 
         zstring result;
@@ -287,7 +288,7 @@ public class zstring
     }
 
     //value是10的次方数
-    private static int get_digit_count(long value)
+    private static int get_digit_count(int value)
     {
         int cnt;
         for (cnt = 1; (value /= 10) > 0; cnt++) ;
@@ -295,15 +296,7 @@ public class zstring
     }
 
     //value是10的次方数
-    private static uint get_digit_count(uint value)
-    {
-        uint cnt;
-        for (cnt = 1; (value /= 10) > 0; cnt++) ;
-        return cnt;
-    }
-
-    //value是10的次方数
-    private static int get_digit_count(int value)
+    private static int get_digit_count(ulong value)
     {
         int cnt;
         for (cnt = 1; (value /= 10) > 0; cnt++) ;
@@ -329,9 +322,9 @@ public class zstring
     private unsafe static zstring internal_format(string input, int num_args)
     {
         if (input == null)
-            throw new ArgumentNullException("value");
+            throw new ArgumentNullException(nameof(input));
 
-        //新字符串长度
+        //第一遍：校验占位符 {n} 并计算新字符串长度
         int new_len = input.Length;
         for (int i = -3; ;)
         {
@@ -340,66 +333,47 @@ public class zstring
             {
                 break;
             }
-            new_len -= 3;
+            if (i + 1 >= input.Length || input[i + 1] < '0' || input[i + 1] > '9')
+                throw new ArgumentException("zstring.format: 占位符{下标}必须是单个数字，位置 " + i, nameof(input));
+            if (i + 2 >= input.Length || input[i + 2] != '}')
+                throw new ArgumentException("zstring.format: 没有发现大括号}，位置 " + i, nameof(input));
             int arg_idx = input[i + 1] - '0';
+            if (arg_idx >= num_args)
+                throw new ArgumentOutOfRangeException(nameof(input), "zstring.format: 占位符{" + arg_idx + "}超出参数数量 " + num_args);
             zstring arg = g_format_args[arg_idx];
-            new_len += arg.Length;
+            if (arg == null)
+                throw new ArgumentException("zstring.format: 参数{" + arg_idx + "}为空，位置 " + i, nameof(input));
+            new_len += arg.Length - 3;
         }
+
         zstring result = get(new_len);
         string res_value = result._value;
 
-        int next_output_idx = 0;
-        int next_input_idx = 0;
-        int brace_idx = -3;
-        for (int i = 0, j = 0, x = 0; ; x++) // x < num_args
+        //第二遍：拷贝字面量与参数内容
+        fixed (char* ptr_input = input)
         {
-            brace_idx = internal_index_of(input, '{', brace_idx + 3);
-            if (brace_idx == -1)
+            fixed (char* ptr_result = res_value)
             {
-                break;
-            }
-            next_input_idx = brace_idx;
-            int arg_idx = input[brace_idx + 1] - '0';
-            string arg = g_format_args[arg_idx]._value;
-            if (brace_idx == -1)
-                throw new InvalidOperationException("没有发现大括号{ for argument " + arg);
-            if (brace_idx + 2 >= input.Length || input[brace_idx + 2] != '}')
-                throw new InvalidOperationException("没有发现大括号} for argument " + arg);
-
-            fixed (char* ptr_input = input)
-            {
-                fixed (char* ptr_result = res_value)
+                int src = 0;
+                int dst = 0;
+                int brace_idx = -3;
+                while (true)
                 {
-                    for (int k = 0; i < new_len;)
+                    brace_idx = internal_index_of(input, '{', brace_idx + 3);
+                    if (brace_idx == -1)
                     {
-                        if (j < brace_idx)
-                        {
-                            ptr_result[i++] = ptr_input[j++];
-                            ++next_output_idx;
-                        }
-                        else
-                        {
-                            ptr_result[i++] = arg[k++];
-                            ++next_output_idx;
-                            if (k == arg.Length)
-                            {
-                                j += 3;
-                                break;
-                            }
-                        }
+                        break;
                     }
+                    int arg_idx = input[brace_idx + 1] - '0';
+                    string arg = g_format_args[arg_idx]._value;
+                    while (src < brace_idx)
+                        ptr_result[dst++] = ptr_input[src++];
+                    for (int k = 0; k < arg.Length; k++)
+                        ptr_result[dst++] = arg[k];
+                    src = brace_idx + 3;
                 }
-            }
-        }
-        next_input_idx += 3;
-        for (int i = next_output_idx, j = 0; i < new_len; i++, j++)
-        {
-            fixed (char* ptr_input = input)
-            {
-                fixed (char* ptr_result = res_value)
-                {
-                    ptr_result[i] = ptr_input[next_input_idx + j];
-                }
+                while (src < input.Length)
+                    ptr_result[dst++] = ptr_input[src++];
             }
         }
         return result;
@@ -436,29 +410,28 @@ public class zstring
         if (count < 0 || start + count > input_len)
             throw new ArgumentOutOfRangeException("count=" + count + " start+count=" + (start + count));
 
-        if (count == 0)
+        if (count == 0 || value.Length == 0)
             return -1;
 
         fixed (char* ptr_input = input)
         {
             fixed (char* ptr_value = value)
             {
-                int found = 0;
+                int value_len = value.Length;
                 int end = start + count;
-                for (int i = start; i < end; i++)
+                for (int i = start; i <= end - value_len; i++)
                 {
-                    for (int j = 0; j < value.Length && i + j < input_len; j++)
+                    bool match = true;
+                    for (int j = 0; j < value_len; j++)
                     {
-                        if (ptr_input[i + j] == ptr_value[j])
+                        if (ptr_input[i + j] != ptr_value[j])
                         {
-                            found++;
-                            if (found == value.Length)
-                                return i;
-                            continue;
-                        }
-                        if (found > 0)
+                            match = false;
                             break;
+                        }
                     }
+                    if (match)
+                        return i;
                 }
                 return -1;
             }
@@ -487,7 +460,8 @@ public class zstring
         {
             fixed (char* dst_ptr = dst)
             {
-                for (int i = 0, j = 0; i < dst.Length; i++)
+                int j = 0;
+                for (int i = 0; i < src.Length; i++)
                 {
                     if (i >= start && i < start + count) // within removal range
                         continue;
@@ -573,7 +547,7 @@ public class zstring
     {
         // "HelloWorld" (to_insert=x, start=5, count=3) -> "HelloxxxWorld"
 
-        if (start < 0 || start >= value.Length)
+        if (start < 0 || start > value.Length)
             throw new ArgumentOutOfRangeException("start=" + start + " Length=" + value.Length);
 
         if (count < 0)
@@ -608,7 +582,7 @@ public class zstring
         if (to_insert == null)
             throw new ArgumentNullException("to_insert");
 
-        if (start < 0 || start >= input.Length)
+        if (start < 0 || start > input.Length)
             throw new ArgumentOutOfRangeException("start=" + start + " Length=" + input.Length);
 
         if (to_insert.Length == 0)
@@ -622,6 +596,11 @@ public class zstring
     //字符串拼接
     private unsafe static zstring internal_concat(string s1, string s2)
     {
+        if (s1 == null)
+            throw new ArgumentNullException("s1");
+        if (s2 == null)
+            throw new ArgumentNullException("s2");
+
         int total_length = s1.Length + s2.Length;
         zstring result = get(total_length);
         fixed (char* ptr_result = result._value)
@@ -659,7 +638,7 @@ public class zstring
     }
 
     //将长度为count的数字插入dst中，起始位置为start，dst的长度需大于start+count
-    private unsafe static void longcpy(char* dst, long value, int start, int count)
+    private unsafe static void intcpy(char* dst, int value, int start, int count)
     {
         int end = start + count;
         for (int i = end - 1; i >= start; i--, value /= 10)
@@ -667,7 +646,7 @@ public class zstring
     }
 
     //将长度为count的数字插入dst中，起始位置为start，dst的长度需大于start+count
-    private unsafe static void intcpy(char* dst, int value, int start, int count)
+    private unsafe static void ulongcpy(char* dst, ulong value, int start, int count)
     {
         int end = start + count;
         for (int i = end - 1; i >= start; i--, value /= 10)
@@ -945,8 +924,8 @@ public class zstring
         internal IDisposable begin()//构造函数
         {
 #if DBG
-                if (log != null)
-                    log("Began block");
+                if (Log != null)
+                    Log("Began block");
 #endif
             return this;
         }
@@ -954,8 +933,8 @@ public class zstring
         void IDisposable.Dispose()//析构函数
         {
 #if DBG
-                if (log != null)
-                    log("Disposing block");
+                if (Log != null)
+                    Log("Disposing block");
 #endif
             while (stack.Count > 0)
             {
@@ -990,10 +969,13 @@ public class zstring
     //类构造：cache_capacity缓存栈字典容量，stack_capacity缓存字符串栈容量，block_capacity缓存栈容量，intern_capacity缓存,open_capacity默认打开层数
     public static void Initialize(int cache_capacity, int stack_capacity, int block_capacity, int intern_capacity, int open_capacity, int shallowCache_capacity)
     {
+        if (g_cache != null)
+            return; // 已初始化，重复调用忽略
+
         g_cache = new Queue<zstring>[cache_capacity];
         g_secCache = new Dictionary<int, Queue<zstring>>(cache_capacity);
         g_blocks = new Stack<zstring_block>(block_capacity);
-        g_intern_table = new Dictionary<int, string>(intern_capacity);
+        g_intern_table = new Dictionary<string, string>(intern_capacity);
         g_open_blocks = new Stack<zstring_block>(open_capacity);
         g_shallowCache = new Stack<zstring>(shallowCache_capacity);
         for (int c = 0; c < cache_capacity; c++)
@@ -1084,15 +1066,16 @@ public class zstring
     }
 
     // long - >zstring转换
-    public unsafe static implicit operator zstring(long value)
+    private unsafe static zstring longToZstring(long value)
     {
         // e.g. 125
         // first pass: count the number of digits
         // then: get a zstring with length = num digits
         // finally: iterate again, get the char of each digit, memcpy char to result
         bool negative = value < 0;
-        value = Math.Abs(value);
-        int num_digits = get_digit_count(value);
+        // use a magnitude that can represent long.MinValue (Math.Abs can't)
+        ulong magnitude = negative ? unchecked((ulong)(-(value + 1))) + 1UL : (ulong)value;
+        int num_digits = get_digit_count(magnitude);
         zstring result;
         if (negative)
         {
@@ -1100,16 +1083,20 @@ public class zstring
             fixed (char* ptr = result._value)
             {
                 *ptr = '-';
-                longcpy(ptr, value, 1, num_digits);
+                ulongcpy(ptr, magnitude, 1, num_digits);
             }
         }
         else
         {
             result = get(num_digits);
             fixed (char* ptr = result._value)
-                longcpy(ptr, value, 0, num_digits);
+                ulongcpy(ptr, magnitude, 0, num_digits);
         }
         return result;
+    }
+    public unsafe static implicit operator zstring(long value)
+    {
+        return longToZstring(value);
     }
 
     //int->zstring转换
@@ -1119,26 +1106,7 @@ public class zstring
         // first pass: count the number of digits
         // then: get a zstring with length = num digits
         // finally: iterate again, get the char of each digit, memcpy char to result
-        bool negative = value < 0;
-        value = Math.Abs(value);
-        int num_digits = get_digit_count(value);
-        zstring result;
-        if (negative)
-        {
-            result = get(num_digits + 1);
-            fixed (char* ptr = result._value)
-            {
-                *ptr = '-';
-                intcpy(ptr, value, 1, num_digits);
-            }
-        }
-        else
-        {
-            result = get(num_digits);
-            fixed (char* ptr = result._value)
-                intcpy(ptr, value, 0, num_digits);
-        }
-        return result;
+        return longToZstring(value);
     }
 
     //float->zstring转换
@@ -1148,7 +1116,7 @@ public class zstring
         bool negative = value < 0;
         if (negative) value = -value;
         long mul = (long)Math.Pow(10, DecimalAccuracy);
-        long number = (long)(value * mul); // gets the number as a whole, e.g. 3148
+        long number = (long)Math.Round((double)value * mul, MidpointRounding.AwayFromZero); // gets the number as a whole, e.g. 3148
         int left_num = (int)(number / mul); // left part of the decimal point, e.g. 3
         int right_num = (int)(number % mul); // right part of the decimal pnt, e.g. 148
         int left_digit_count = get_digit_count(left_num); // e.g. 1
@@ -1205,6 +1173,10 @@ public class zstring
     //+重载
     public static zstring operator +(zstring left, zstring right)
     {
+        if (ReferenceEquals(left, null))
+            throw new ArgumentNullException("left");
+        if (ReferenceEquals(right, null))
+            throw new ArgumentNullException("right");
         return internal_concat(left, right);
     }
     //==重载
@@ -1219,7 +1191,11 @@ public class zstring
     //!=重载
     public static bool operator !=(zstring left, zstring right)
     {
-        return !(left._value == right._value);
+        if (ReferenceEquals(left, null))
+            return !ReferenceEquals(right, null);
+        if (ReferenceEquals(right, null))
+            return true;
+        return left._value != right._value;
     }
     //转换为大写
     public unsafe zstring ToUpper()
@@ -1313,7 +1289,7 @@ public class zstring
         if (start < 0 || start >= Length)
             throw new ArgumentOutOfRangeException("start");
 
-        if (count > Length)
+        if (count < 0 || count > Length - start)
             throw new ArgumentOutOfRangeException("count");
 
         zstring result = get(count);
@@ -1333,19 +1309,26 @@ public class zstring
     {
         return IndexOf(value) != -1;
     }
-    //子串第一次出现位置
+    //子串最后一次出现位置
     public int LastIndexOf(string value)
     {
-        int idx = -1;
-        int last_find = -1;
-        while (true)
+        if (value == null)
+            throw new ArgumentNullException("value");
+
+        if (value.Length == 0)
+            return Length;
+
+        int last = -1;
+        int pos = 0;
+        while (pos < Length)
         {
-            idx = internal_index_of(this._value, value, idx + value.Length);
-            last_find = idx;
-            if (idx == -1 || idx + value.Length >= this._value.Length)
-                break;
+            int idx = internal_index_of(this._value, value, pos);
+            if (idx == -1)
+                return last;
+            last = idx;
+            pos = idx + 1;
         }
-        return last_find;
+        return last;
     }
     //字符第一次出现位置
     public int LastIndexOf(char value)
@@ -1654,11 +1637,19 @@ public class zstring
     //是否以value结束
     public static bool IsPrefix(zstring str, string value)
     {
+        if (ReferenceEquals(str, null))
+            throw new ArgumentNullException("str");
+        if (value == null)
+            throw new ArgumentNullException("value");
         return str.StartsWith(value);
     }
     //是否以value开始
     public static bool isPostfix(zstring str, string postfix)
     {
+        if (ReferenceEquals(str, null))
+            throw new ArgumentNullException("str");
+        if (postfix == null)
+            throw new ArgumentNullException("postfix");
         return str.EndsWith(postfix);
     }
     #endregion Public API
